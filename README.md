@@ -117,8 +117,75 @@ Após executar o join, verificar:
 
 | Métrica     | Resultado esperado      |
 |------------|------------------|
-| pedidos_unicos  | `31128`    |
-| Processing | `24838`    |
-| Shipped    | `37538`    |
-| Cancelled  | `18660`    |
-| Returned   | `12564`    |
+| total_itens  | `181097`    |
+| pedidos_unicos | `124728`    |
+| receita_bruta_total   | `10780245.99`    |
+| perda_por_devolucoes  | `1085492.9`    |
+| itens_sem_pais  | `0`    |
+| avg_dias_para_envio  | `1.5`    |
+
+## Fase 4 — Analytics (Camada Gold)
+
+**Objetivo:** Entregar as tabelas finais prontas para o time de BI, respondendo as perguntas de negócio do brief.
+
+**Tabela 1 — dim_customers_gold**  
+
+**1. Lógica de status do ciclo de vida**  
+
+| Status     | Critério     |
+|------------|------------------|
+| Novo   | Apenas 1 pedido completo    |
+| Recorrente | 2+ pedidos, recência ≤ 90 dias    |
+| Churn    | Sem compra há mais de 90 dias    |
+| Recuperado  | Estava em Churn (> 90 dias inativo), voltou a comprar  |
+
+*Threshold de 90 dias é padrão de e-commerce. Ajustar conforme o ciclo de compra real do produto.*  
+
+**2. Scores RFM (escala 1–4)**
+
+| Dimensão    | Score 4  | Score 3  | Score 2 |  Score 1 |
+|------------|-----------|----------|---------|----------|
+| Recência   | ≤ 30 dias | ≤ 60 dias| ≤ 90 dias |> 90 dias|
+| Frequência |≥ 10 pedidos| ≥ 5 pedidos| ≥ 2 pedidos| 1 pedido
+| Monetário | ≥ $500 |≥ $200 |≥ $50 |< $50
+
+**3. Segmentos de negócio gerados**
+
+| Segmento  | Critério  | Ação de CRM  |
+|------------|-----------|----------|
+| Champions | R=4, F≥3, M≥3 | Fidelizar, pedir reviews |
+| Loyal Customers | R≥3, F≥3 | Upsell, programa de pontos |
+| Recent Customers | R=4, F≤2 | Incentivar 2ª compra |
+| Big Spenders | R≥3, M≥3 | Produtos premium |
+| At Risk | R=2, F≥2 | Campanha de retenção urgente |
+| Cant Lose Them | R=1, F≥3 |Reativação prioritária|
+| Lost | R=1, F=1 | Baixa prioridade ou descontinuar|
+| Needs Attention | Perfil misto | Investigar|
+
+**4. Colunas extras entregues**
+
+| Coluna    | Lógica      | Interpretação |
+|------------|---------------- | ---------|
+| dias_como_cliente | DATE_DIFF(hoje, user_created_at, DAY) | Janela do LTV |
+| ltv_diario_estimado | receita_total / dias_como_cliente | Proxy de LTV sem modelo preditivo |
+| primeira_compra_at | MIN(order_created_at) | Análise de coorte |
+
+## Tabela 2 — fct_sales_performance
+KPIs operacionais por país: receita, ticket médio e SLA logístico.  
+
+| Campo     | Critério     |
+|------------|------------------|
+| receita_bruta   | Soma de sale_price por país    |
+| receita_liquida | Exclui itens devolvidos e cancelados    |
+| perda_devolucoes    | Receita bruta − líquida (impacto financeiro das devoluções)   |
+| ticket_medio  | Média de sale_price por item  |
+| avg_dias_envio  | SLA de fulfillment  |
+| pct_envio_atrasado  | % de envios com mais de 3 dias |
+
+**Séries temporais — YoY e MoM**
+
+| Coluna    | Técnica      | Descrição |
+|------------|---------------- | ---------|
+| variacao_mom_pct | LAG(receita, 1) | Crescimento vs mês anteriore |
+| variacao_yoy_pct | LAG(receita, 12) | Crescimento vs mesmo mês do ano anterior |
+| media_movel_3m | AVG() OVER (ROWS 2 PRECEDING) | Suaviza sazonalidade |
