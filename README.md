@@ -50,8 +50,55 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 
 | Coluna      | Nulos encontrados            | Ação na Fase 2 |
 |-------------|------------------------------|----------------|
-| `users.age`    | _preencher_        | COALESCE(age, 0) |
-| `users.country` | _preencher_ | UPPER(TRIM(country))   |
-| `users.email`     | _preencher_  | LOWER(TRIM(email))  |
-| `orders.shipped_at` | _preencher_ | Usado para SLA logístico  |
-| `orders.returned_at`     | _preencher_  | Flag de devolução |
+| `users.age`    | _0_        | COALESCE(age, 0) |
+| `users.country` | _0_ | UPPER(TRIM(country))   |
+| `users.email`     | _0_  | LOWER(TRIM(email))  |
+| `orders.shipped_at` | _37538_ | Usado para SLA logístico  |
+| `orders.returned_at`     | _12564_  | Flag de devolução |
+
+**4. Status de pedidos**
+
+| Status     | Quantidade      |
+|------------|------------------|
+| Complete   | `31128`    |
+| Processing | `24838`    |
+| Shipped    | `37538`    |
+| Cancelled  | `18660`    |
+| Returned   | `12564`    |
+
+## Fase 2 — Limpeza ETL (Camada Silver)  
+
+**Objetivo:** Transformar dados brutos em dados confiáveis e padronizados.
+
+**1. Decisões de limpeza documentadas**
+
+| Campo        | Problema  | Solução    | Justificativa |
+|--------------|-------------|-----------|---------------|
+| `country`    | Grafias inconsistentes ("USA", "us", "United States") | `UPPER(TRIM(country))`      | Padrão para geotargeting |
+| `email`      | Maiúsculas e espaços extras   | `LOWER(TRIM(email))`        | Chave de identificação única |
+| `age`        | Valores nulos | `COALESCE(age, 0)`          | Zero sinaliza ausência sem mascarar o problema  |
+| `created_at` | Tipo inconsistente  | `CAST AS TIMESTAMP`         | Garante fuso correto para cálculo de datas |
+
+**2. Colunas derivadas criadas**
+
+|Coluna      | Lógica               | Para que serve                                  |
+|-------------|------------------------------|-----------------------------------------------|
+| `safra_cadastro`    |EXTRACT(YEAR FROM created_at)           | Análise de coorte (clientes de 2022 vs 2023) |
+| `faixa_etaria` | CASE WHEN age BETWEEN... | Segmentação demográfica                            |
+| `foi_devolvido`     | CASE WHEN status = 'Returned'          | Filtro de receita líquida                         |
+| `receita_liquida`     | sale_price onde não devolvido          |Receita real, excluindo devoluções |
+
+## Fase 3 — Modelagem / Joins (Camada Silver)
+
+**Objetivo:** Unir as tabelas limpas da Fase 2 e preparar a base analítica unificada com métricas de eficiência logística.
+
+**Decisão de modelagem: granularidade do join**
+
+| Status     | Quantidade      | Motivo  |
+|------------|---------------- | ---------|
+| order_items → orders  | LEFT JOIN | Garante que itens sem pedido pai sejam auditáveis |
+| order_items → users | LEFT JOIN | Preserva orphans para investigação |
+| Granularidade final   | 1 linha por item | Correto para cálculo de receita sem duplicação |
+
+*Por que LEFT JOIN e não INNER JOIN?*  
+Pedidos sem usuário correspondente seriam silenciosamente descartados com INNER JOIN. Com LEFT JOIN, eles aparecem com country IS NULL — detectáveis na validação.
