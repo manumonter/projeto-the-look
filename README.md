@@ -170,7 +170,7 @@ Após executar o join, verificar:
 | ltv_diario_estimado | receita_total / dias_como_cliente | Proxy de LTV sem modelo preditivo |
 | primeira_compra_at | MIN(order_created_at) | Análise de coorte |
 
-## Tabela 2 — fct_sales_performance
+**Tabela 2 — fct_sales_performance**  
 KPIs operacionais por país: receita, ticket médio e SLA logístico.  
 
 | Campo     | Critério     |
