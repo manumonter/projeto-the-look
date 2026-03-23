@@ -92,9 +92,9 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 
 **Objetivo:** Unir as tabelas limpas da Fase 2 e preparar a base analítica unificada com métricas de eficiência logística.
 
-**Decisão de modelagem: granularidade do join**
+**1. Decisão de modelagem: granularidade do join**
 
-| Status     | Quantidade      | Motivo  |
+| Join     | Tipo     | Motivo  |
 |------------|---------------- | ---------|
 | order_items → orders  | LEFT JOIN | Garante que itens sem pedido pai sejam auditáveis |
 | order_items → users | LEFT JOIN | Preserva orphans para investigação |
@@ -102,3 +102,23 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 
 *Por que LEFT JOIN e não INNER JOIN?*  
 Pedidos sem usuário correspondente seriam silenciosamente descartados com INNER JOIN. Com LEFT JOIN, eles aparecem com country IS NULL — detectáveis na validação.
+
+**2. Colunas de SLA logístico criadas**
+
+| Coluna    | Lógica      | Interpretação |
+|------------|---------------- | ---------|
+| dias_para_envio | DATE_DIFF(shipped_at, created_at, DAY) | Eficiência do fulfillment |
+| dias_para_entrega | DATE_DIFF (delivered_at, created_at, DAY) | Experiência do cliente |
+| envio_atrasado | dias_para_envio > 3 | Threshold de mercado (ajustável) |
+
+**3. Checklist de validação do join**  
+
+Após executar o join, verificar:  
+
+| Métrica     | Resultado esperado      |
+|------------|------------------|
+| pedidos_unicos  | `31128`    |
+| Processing | `24838`    |
+| Shipped    | `37538`    |
+| Cancelled  | `18660`    |
+| Returned   | `12564`    |
