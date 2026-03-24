@@ -23,7 +23,7 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 - **Padrão:** Medallion Architecture (Bronze → Silver → Gold)  
 - **Governança:** CTEs modulares, comentários explicando decisões de negócio  
 
-## Fase 1 — Auditoria (Discovery)  
+## Fase 1: Auditoria (Discovery)  
 
 **Objetivo:** Entender a estrutura dos dados antes de construir qualquer métrica.
 
@@ -37,7 +37,7 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 | `order_items` | 1 linha por item no pedido | Cálculo de receita                            |
 | `users`     | 1 linha por usuário          | Base do Customer 360                          |
 
-**2. Integridade da chave primária — users.id**
+**2. Integridade da chave primária - users.id**
 
 | Métrica              | Resultado                      |
 |----------------------|--------------------------------|
@@ -66,7 +66,7 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 | Cancelled  | `18660`    |
 | Returned   | `12564`    |
 
-## Fase 2 — Limpeza ETL (Camada Silver)  
+## Fase 2: Limpeza ETL (Camada Silver)  
 
 **Objetivo:** Transformar dados brutos em dados confiáveis e padronizados.
 
@@ -88,7 +88,7 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 | `foi_devolvido`     | CASE WHEN status = 'Returned'          | Filtro de receita líquida                         |
 | `receita_liquida`     | sale_price onde não devolvido          |Receita real, excluindo devoluções |
 
-## Fase 3 — Modelagem / Joins (Camada Silver)
+## Fase 3: Modelagem / Joins (Camada Silver)
 
 **Objetivo:** Unir as tabelas limpas da Fase 2 e preparar a base analítica unificada com métricas de eficiência logística.
 
@@ -124,7 +124,7 @@ Após executar o join, verificar:
 | itens_sem_pais  | `0`    |
 | avg_dias_para_envio  | `1.5`    |
 
-## Fase 4 — Analytics (Camada Gold)
+## Fase 4: Analytics (Camada Gold)
 
 **Objetivo:** Entregar as tabelas finais prontas para o time de BI, respondendo as perguntas de negócio do brief.
 
