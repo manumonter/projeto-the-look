@@ -89,43 +89,28 @@ SELECT *
 FROM users_clean
 ORDER BY created_at;
 
-
--- ============================================================
 -- [EXTRA] SILVER — VISÃO LIMPA DE ITENS DE PEDIDO
--- ------------------------------------------------------------
--- order_items é a fonte correta para cálculo de receita
--- (conforme validado na Fase 1 - Atividade 1).
--- ============================================================
 
 WITH order_items_clean AS (
     SELECT
-        id                                              AS item_id,
+        id AS item_id,
         order_id,
         user_id,
         product_id,
         status,
-
-        -- Valor de venda (fonte correta de receita)
-        ROUND(sale_price, 2)                            AS sale_price,
-
-        -- Datas tipadas
-        CAST(created_at AS TIMESTAMP)                   AS created_at,
-        CAST(shipped_at AS TIMESTAMP)                   AS shipped_at,
-        CAST(delivered_at AS TIMESTAMP)                 AS delivered_at,
-        CAST(returned_at AS TIMESTAMP)                  AS returned_at,
-
-        -- [EXTRA] Flag de devolução — útil para calcular receita líquida
+        ROUND(sale_price, 2) AS sale_price,
+        CAST(created_at AS TIMESTAMP) AS created_at,
+        CAST(shipped_at AS TIMESTAMP) AS shipped_at,
+        CAST(delivered_at AS TIMESTAMP) AS delivered_at,
+        CAST(returned_at AS TIMESTAMP) AS returned_at,
         CASE
             WHEN status = 'Returned' THEN TRUE
             ELSE FALSE
-        END                                             AS foi_devolvido,
-
-        -- [EXTRA] Receita líquida (exclui devoluções)
+        END AS foi_devolvido,
         CASE
             WHEN status = 'Returned' THEN 0
             ELSE ROUND(sale_price, 2)
-        END                                             AS receita_liquida
-
+        END AS receita_liquida
     FROM `bigquery-public-data.thelook_ecommerce.order_items`
     WHERE order_id IS NOT NULL
       AND user_id  IS NOT NULL
