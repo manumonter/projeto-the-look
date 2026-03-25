@@ -3,6 +3,7 @@
 CREATE OR REPLACE TABLE `projeto-the-look-ecommerce.crm_analytics.dim_customers_gold` AS
 
 WITH
+
 users_clean AS (
     SELECT
         id AS user_id,
@@ -10,122 +11,101 @@ users_clean AS (
         first_name,
         last_name,
         COALESCE(age, 0) AS age,
-        gender,
+        UPPER(TRIM(gender)) AS gender,
         UPPER(TRIM(country)) AS country,
         UPPER(TRIM(state)) AS state,
         city,
         CAST(created_at AS TIMESTAMP) AS user_created_at,
         EXTRACT(YEAR FROM CAST(created_at AS TIMESTAMP)) AS safra_cadastro,
         CASE
-            WHEN age BETWEEN 18 AND 25 THEN '18–25'
-            WHEN age BETWEEN 26 AND 35 THEN '26–35'
-            WHEN age BETWEEN 36 AND 45 THEN '36–45'
-            WHEN age BETWEEN 46 AND 60 THEN '46–60'
+            WHEN age BETWEEN 18 AND 25 THEN '18-25'
+            WHEN age BETWEEN 26 AND 35 THEN '26-35'
+            WHEN age BETWEEN 36 AND 45 THEN '36-45'
+            WHEN age BETWEEN 46 AND 60 THEN '46-60'
             WHEN age > 60             THEN '60+'
-            ELSE 'Não informado'
+            ELSE 'Nao informado'
         END AS faixa_etaria
     FROM `bigquery-public-data.thelook_ecommerce.users`
-    WHERE id IS NOT NULL
 ),
-orders_complete AS (
+
+orders_all AS (
     SELECT
         user_id,
-        id AS order_id,
+        order_id,
+        status AS status_pedido,
         CAST(created_at AS TIMESTAMP) AS order_created_at
     FROM `bigquery-public-data.thelook_ecommerce.orders`
-    WHERE status = 'Complete'
-      AND user_id IS NOT NULL
+    WHERE user_id IS NOT NULL
 ),
-receita_por_usuario AS (
+
+orders_metrics AS (
     SELECT
-        user_id,
-        ROUND(SUM(sale_price), 2) AS receita_total,
-        ROUND(AVG(sale_price), 2) AS ticket_medio_usuario
-    FROM `bigquery-public-data.thelook_ecommerce.order_items`
-    WHERE status NOT IN ('Returned', 'Cancelled')
-      AND user_id IS NOT NULL
-    GROUP BY 1
-),
-rfm_raw AS (
-    SELECT
-        user_id,
+        o.user_id,
+        COUNT(DISTINCT o.order_id) AS total_pedidos,
+        COUNT(DISTINCT CASE
+            WHEN o.status_pedido = 'Complete'
+            THEN o.order_id END) AS pedidos_completos,
+        MAX(o.order_created_at) AS ultima_compra_at,
+        MIN(o.order_created_at) AS primeira_compra_at,
         DATE_DIFF(
             CURRENT_DATE(),
-            DATE(MAX(order_created_at)),
+            DATE(MAX(o.order_created_at)),
             DAY
         ) AS dias_inativo,
-        MAX(order_created_at) AS ultima_compra_at,
-        COUNT(order_id) AS total_pedidos,
-        MIN(order_created_at) AS primeira_compra_at
-    FROM orders_complete
+        ROUND(SUM(oi.sale_price), 2) AS receita_bruta,
+        ROUND(SUM(
+            CASE
+                WHEN oi.status IN ('Returned', 'Cancelled') THEN 0
+                ELSE oi.sale_price
+            END
+        ), 2) AS receita_liquida,
+        ROUND(SUM(
+            CASE
+                WHEN oi.status IN ('Returned', 'Cancelled') THEN oi.sale_price
+                ELSE 0
+            END
+        ), 2) AS perda_devolucoes,
+        ROUND(AVG(oi.sale_price), 2) AS ticket_medio
+    FROM orders_all AS o
+    LEFT JOIN `bigquery-public-data.thelook_ecommerce.order_items` AS oi
+        ON o.order_id = oi.order_id
     GROUP BY 1
 ),
-rfm_scored AS (
-    SELECT
-        r.user_id,
-        r.dias_inativo,
-        r.total_pedidos,
-        r.ultima_compra_at,
-        r.primeira_compra_at,
-        rev.receita_total,
-        rev.ticket_medio_usuario,
-        CASE
-            WHEN r.dias_inativo <= 90
-             AND r.total_pedidos > 1
-             AND DATE_DIFF(
-                    CURRENT_DATE(),
-                    DATE(r.primeira_compra_at),
-                    DAY
-                 ) > 90 THEN 'Recuperado'
-            WHEN r.dias_inativo > 90 THEN 'Churn'
-            WHEN r.total_pedidos = 1 THEN 'Novo'
-            ELSE  'Recorrente'
-        END AS status_cliente,
-        CASE
-            WHEN r.dias_inativo <= 30  THEN 4  
-            WHEN r.dias_inativo <= 60  THEN 3  
-            WHEN r.dias_inativo <= 90  THEN 2  
-            ELSE 1  
-        END AS score_recencia,
-        CASE
-            WHEN r.total_pedidos >= 10 THEN 4  
-            WHEN r.total_pedidos >= 5  THEN 3  
-            WHEN r.total_pedidos >= 2  THEN 2  
-            ELSE 1  
-        END AS score_frequencia,
-        CASE
-            WHEN rev.receita_total >= 500 THEN 4  
-            WHEN rev.receita_total >= 200 THEN 3  
-            WHEN rev.receita_total >= 50  THEN 2 
-            ELSE 1  
-        END  AS score_monetario
 
-    FROM rfm_raw AS r
-    LEFT JOIN receita_por_usuario AS rev ON r.user_id = rev.user_id
-),
-rfm_segmented AS (
+rfm_classified AS (
     SELECT
-        *,
-        score_recencia + score_frequencia + score_monetario AS score_rfm_total,
+        user_id,
+        dias_inativo,
+        total_pedidos,
+        pedidos_completos,
+        receita_bruta,
+        receita_liquida,
+        perda_devolucoes,
+        ticket_medio,
+        ultima_compra_at,
+        primeira_compra_at,
         CASE
-            WHEN score_recencia = 4
-             AND score_frequencia >= 3
-             AND score_monetario >= 3  THEN 'Recentes'
-            WHEN score_recencia >= 3
-             AND score_frequencia >= 3  THEN 'Fiéis'
-            WHEN score_recencia = 4
-             AND score_frequencia <= 2  THEN 'Compradores recentes'
-            WHEN score_recencia >= 3
-             AND score_monetario >= 3  THEN 'Gastam muito'
-            WHEN score_recencia = 2
-             AND score_frequencia >= 2  THEN 'Em risco'
-            WHEN score_recencia = 1
-             AND score_frequencia >= 3  THEN 'Não pode perder'
-            WHEN score_recencia = 1
-             AND score_frequencia = 1  THEN 'Perdido'
-            ELSE  'Precisa investigar'
-        END AS segmento_rfm
-    FROM rfm_scored
+            WHEN dias_inativo IS NULL THEN 'Sem compra'
+            WHEN dias_inativo <= 30 THEN 'Ativo'
+            WHEN dias_inativo <= 90 THEN 'Em risco'
+            ELSE 'Churn'
+        END  AS segmento_recencia,
+        CASE
+            WHEN total_pedidos IS NULL THEN 'Sem compra'
+            WHEN total_pedidos >= 5 THEN 'Muito recorrente'
+            WHEN total_pedidos >= 3 THEN 'Recorrente'
+            WHEN total_pedidos = 2  THEN 'Ocasional'
+            ELSE 'Compra unica'
+        END AS segmento_frequencia,
+        CASE
+            WHEN receita_liquida IS NULL
+              OR receita_liquida = 0  THEN 'Sem compra'
+            WHEN receita_liquida >= 500 THEN 'Premium'
+            WHEN receita_liquida >= 200 THEN 'Alto valor'
+            WHEN receita_liquida >= 50  THEN 'Medio valor'
+            ELSE  'Baixo valor'
+        END AS segmento_valor
+    FROM orders_metrics
 )
 
 SELECT
@@ -141,32 +121,26 @@ SELECT
     u.city,
     u.user_created_at,
     u.safra_cadastro,
-    r.dias_inativo,
-    r.total_pedidos,
-    r.receita_total,
-    r.ticket_medio_usuario,
+    COALESCE(r.total_pedidos, 0) AS total_pedidos,
+    COALESCE(r.pedidos_completos, 0) AS pedidos_completos,
+    COALESCE(r.dias_inativo, 0) AS dias_inativo,
     r.primeira_compra_at,
     r.ultima_compra_at,
-    r.score_recencia,
-    r.score_frequencia,
-    r.score_monetario,
-    r.score_rfm_total,
-    r.status_cliente,
-    r.segmento_rfm,
+    COALESCE(r.receita_bruta, 0) AS receita_bruta,
+    COALESCE(r.receita_liquida, 0) AS receita_liquida,
+    COALESCE(r.perda_devolucoes, 0) AS perda_devolucoes,
+    COALESCE(r.ticket_medio, 0) AS ticket_medio,
+    COALESCE(r.segmento_recencia, 'Sem compra') AS segmento_recencia,
+    COALESCE(r.segmento_frequencia, 'Sem compra') AS segmento_frequencia,
+    COALESCE(r.segmento_valor, 'Sem compra') AS segmento_valor,
     DATE_DIFF(
         CURRENT_DATE(),
         DATE(u.user_created_at),
         DAY
-    )  AS dias_como_cliente,
-    ROUND(
-        SAFE_DIVIDE(
-            r.receita_total,
-            DATE_DIFF(CURRENT_DATE(), DATE(u.user_created_at), DAY)
-        ), 4
-    ) AS ltv_diario_estimado
+    ) AS dias_como_cliente
 FROM users_clean       AS u
-LEFT JOIN rfm_segmented AS r ON u.user_id = r.user_id
-ORDER BY r.score_rfm_total DESC NULLS LAST;
+LEFT JOIN rfm_classified AS r ON u.user_id = r.user_id
+ORDER BY r.receita_liquida DESC NULLS LAST;
 
 -- ATIVIDADE 9: fct_sales_performance
 
