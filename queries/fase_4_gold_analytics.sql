@@ -202,36 +202,39 @@ ORDER BY receita_bruta DESC;
 -- ATIVIDADE 10: SÉRIES TEMPORAIS — YoY e MoM
 
 WITH
-
 receita_mensal AS (
     SELECT
         DATE_TRUNC(DATE(CAST(oi.created_at AS TIMESTAMP)), MONTH) AS mes,
         ROUND(SUM(oi.sale_price), 2) AS receita_bruta,
         ROUND(SUM(
-            CASE WHEN oi.status NOT IN ('Returned','Cancelled')
-                 THEN oi.sale_price ELSE 0 END
+            CASE WHEN oi.status IN ('Returned','Cancelled')
+                 THEN 0 ELSE oi.sale_price END
         ), 2) AS receita_liquida,
-        COUNT(DISTINCT o.id) AS pedidos,
+        ROUND(SUM(
+            CASE WHEN oi.status IN ('Returned','Cancelled')
+                 THEN oi.sale_price ELSE 0 END
+        ), 2) AS perda_devolucoes,
+        COUNT(DISTINCT o.id) AS total_pedidos,
         COUNT(DISTINCT o.user_id) AS clientes_ativos,
         COUNT(DISTINCT CASE
             WHEN DATE_TRUNC(DATE(CAST(o.created_at AS TIMESTAMP)), MONTH)
                = DATE_TRUNC(DATE(MIN(CAST(o.created_at AS TIMESTAMP)) OVER (PARTITION BY o.user_id)), MONTH)
             THEN o.user_id
         END) AS novos_clientes
-
     FROM `bigquery-public-data.thelook_ecommerce.order_items` AS oi
     LEFT JOIN `bigquery-public-data.thelook_ecommerce.orders` AS o
         ON oi.order_id = o.id
-    WHERE o.status = 'Complete'
+    WHERE oi.order_id IS NOT NULL
     GROUP BY 1
 )
-
 SELECT
     mes,
     receita_bruta,
     receita_liquida,
-    pedidos,
+    perda_devolucoes,
+    total_pedidos,
     clientes_ativos,
+    novos_clientes,
     LAG(receita_bruta, 1) OVER (ORDER BY mes) AS receita_mes_anterior,
     ROUND(
         SAFE_DIVIDE(
@@ -250,37 +253,39 @@ SELECT
         ORDER BY mes
         ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
     ), 2) AS media_movel_3m
-
 FROM receita_mensal
 ORDER BY mes;
 
 -- [EXTRA] ANÁLISE DE CHURN — QUANTIFICAÇÃO DA PERDA
 
 WITH
-
 users_clean AS (
     SELECT id AS user_id, UPPER(TRIM(country)) AS country
     FROM `bigquery-public-data.thelook_ecommerce.users`
     WHERE id IS NOT NULL
 ),
-
 rfm_base AS (
     SELECT
         user_id,
         DATE_DIFF(CURRENT_DATE(), DATE(MAX(CAST(created_at AS TIMESTAMP))), DAY) AS dias_inativo,
         COUNT(id) AS total_pedidos
     FROM `bigquery-public-data.thelook_ecommerce.orders`
-    WHERE status = 'Complete' AND user_id IS NOT NULL
+    WHERE user_id IS NOT NULL
     GROUP BY 1
 ),
-
 receita_base AS (
-    SELECT user_id, ROUND(SUM(sale_price), 2) AS receita_total
+    SELECT
+        user_id,
+        ROUND(SUM(
+            CASE
+                WHEN status IN ('Returned','Cancelled') THEN 0
+                ELSE sale_price
+            END
+        ), 2) AS receita_total
     FROM `bigquery-public-data.thelook_ecommerce.order_items`
-    WHERE status NOT IN ('Returned','Cancelled') AND user_id IS NOT NULL
+    WHERE user_id IS NOT NULL
     GROUP BY 1
 ),
-
 clientes_com_status AS (
     SELECT
         r.user_id,
@@ -295,16 +300,14 @@ clientes_com_status AS (
     FROM rfm_base AS r
     LEFT JOIN receita_base AS rev ON r.user_id = rev.user_id
 )
-
 SELECT
     status_cliente,
-    COUNT(*)  AS total_clientes,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)  AS pct_da_base,
+    COUNT(*) AS total_clientes,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct_da_base,
     ROUND(SUM(receita_total), 2) AS receita_gerada,
-    ROUND(AVG(receita_total), 2)  AS receita_media_por_cliente,
+    ROUND(AVG(receita_total), 2) AS receita_media_por_cliente,
     ROUND(AVG(dias_inativo), 0) AS avg_dias_inativo,
     ROUND(AVG(total_pedidos), 1) AS avg_pedidos
-
 FROM clientes_com_status
 GROUP BY 1
 ORDER BY receita_gerada DESC;
