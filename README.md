@@ -1,20 +1,20 @@
 # PROJETO: INTEGRAÇÃO DE DADOS CRM - THE LOOK
 
 ## Contexto do problema  
-A "The Look" cresceu exponencialmente nos últimos 2 anos, mas sua infraestrutura de dados não acompanhou o crescimento. O time de Marketing usava planilhas exportadas para calcular campanhas, e o Financeiro usava outro sistema para calcular receita. Os números não batiam.
-Os três problemas centrais identificados:
+A empresa cresceu. Os dados, não.  
+A The Look saiu de uma loja pequena para processar milhares de pedidos globalmente em menos de 2 anos. Mas enquanto o volume crescia, a inteligência sobre os clientes ficou para trás.  
+O time de Marketing usava planilhas exportadas para planejar campanhas. O Financeiro calculava receita em outro sistema. Os números não batiam. E ninguém sabia responder perguntas básicas:  
 
-| Problema               | Impacto                                                                 |
-|------------------------|-------------------------------------------------------------------------|
-| Cegueira de cliente    | Sem diferenciação entre cliente de alto valor e cliente inativo        |
-| Dados sujos            | Países com grafias inconsistentes, idades nulas, emails duplicados     |
-| Métricas inexistentes  | Sem clareza sobre Churn, LTV ou ticket médio real                      |
+- Quem são nossos melhores clientes?  
+- Quantos clientes estamos perdendo por mês?  
+- Em quais países estamos tendo mais devoluções?  
+- Qual é o nosso ticket médio real?  
 
 ## Objetivo
 
 Construir um Data Warehouse em camadas no BigQuery que limpe os dados brutos e entregue tabelas prontas para o time de BI.
 
-Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
+
 
 ## Stack
 
@@ -23,169 +23,81 @@ Bronze (dados brutos) → Silver (dados limpos) → Gold (métricas prontas)
 - **Padrão:** Medallion Architecture (Bronze → Silver → Gold)  
 - **Governança:** CTEs modulares, comentários explicando decisões de negócio  
 
-## Fase 1: Auditoria (Discovery)  
+## O que foi construído
 
-**Objetivo:** Entender a estrutura dos dados antes de construir qualquer métrica.
+Uma Single Source of Truth (SSOT) — uma fonte única de verdade para toda a área de CRM e Vendas, estruturada em camadas no Google BigQuery. O projeto seguiu a Arquitetura Medalha, separando claramente cada etapa do processo:  
 
-**Principais descobertas**  
+Bronze → dados brutos, como vieram da fonte  
+Silver → dados limpos, padronizados e unidos  
+Gold   → métricas prontas para o time de BI tomar decisões
 
-**1. Granularidade das tabelas**
+Ao final, duas tabelas Gold foram entregues:  
 
-| Tabela      | Granularidade                | Uso correto                                   |
+`dim_customers_gold`: visão 360° de cada cliente, com segmentação RFM em 3 dimensões independentes (Recência, Frequência e Valor Monetário), receita bruta e líquida, e métricas de comportamento de compra. Todos os clientes estão presentes, incluindo quem nunca comprou — informação crítica para campanhas de ativação.  
+`fct_sales_performance`: tabela de fatos de vendas com granularidade de 1 linha por pedido, contendo ticket médio, métricas de SLA logístico (dias entre pedido e envio) e variações de crescimento YoY e MoM.
+
+## Como foi feito
+
+O projeto utilizou 3 tabelas brutas do dataset público thelook_ecommerce:
+
+| Tabela      | Granularidade               | O que contém                                  |
 |-------------|------------------------------|-----------------------------------------------|
-| `orders`    | 1 linha por pedido           | Contagem de pedidos, status, datas logísticas |
-| `order_items` | 1 linha por item no pedido | Cálculo de receita                            |
-| `users`     | 1 linha por usuário          | Base do Customer 360                          |
+| `orders`    | 1 linha por pedido           | Pedidos realizados, com status e datas logísticas |
+| `order_items` | 1 linha por item no pedido | Itens individuais dentro de cada pedido, com valor de venda                            |
+| `users`     | 1 linha por usuário          | Dados cadastrais de cada cliente                          |
 
-**2. Integridade da chave primária - users.id**
+## O trabalho foi dividido em 4 fases:
 
-| Métrica              | Resultado                      |
-|----------------------|--------------------------------|
-| Total de linhas      | `100000`    |
-| IDs únicos           | `100000`    |
-| Linhas duplicadas    | `0`    |
-| Integridade (%)      | `100`    |
+**Fase 1 - Auditoria**
 
-**3. Qualidade por coluna**
+Antes de construir qualquer métrica, os dados foram investigados para entender o que existia e o que estava quebrado. Essa etapa respondeu perguntas como: a chave primária de usuários é realmente única? Quantos pedidos estão sem usuário associado? Quais países aparecem com grafias diferentes? Principais achados:
 
-| Coluna      | Nulos encontrados            | Ação na Fase 2 |
-|-------------|------------------------------|----------------|
-| `users.age`    | _0_        | COALESCE(age, 0) |
-| `users.country` | _0_ | UPPER(TRIM(country))   |
-| `users.email`     | _0_  | LOWER(TRIM(email))  |
-| `orders.shipped_at` | _37538_ | Usado para SLA logístico  |
-| `orders.returned_at`     | _12564_  | Flag de devolução |
+- Países com grafias inconsistentes: "USA", "United States", "us" — todos representando o mesmo lugar  
+- Idades nulas em parte da base de clientes  
+- Pedidos com status Cancelled e Returned presentes na base — tratados como colunas na camada Gold, não filtrados  
 
-**4. Status de pedidos**
+**Fase 2 — Limpeza (Camada Silver)**
 
-| Status     | Quantidade      |
-|------------|------------------|
-| Complete   | `31128`    |
-| Processing | `24838`    |
-| Shipped    | `37538`    |
-| Cancelled  | `18660`    |
-| Returned   | `12564`    |
+Com os problemas mapeados, cada coluna crítica foi tratada:
 
-## Fase 2: Limpeza ETL (Camada Silver)  
+- País: UPPER(TRIM(country)) — elimina variações de maiúsculas e espaços extras
+- Email: LOWER(TRIM(email)) — padroniza como chave de identificação única
+- Idade: COALESCE(age, 0) — substitui nulos por zero, mantendo o problema visível em vez de mascarar com média
+- Datas: CAST(created_at AS TIMESTAMP) — garante o tipo correto para cálculos de tempo
 
-**Objetivo:** Transformar dados brutos em dados confiáveis e padronizados.
+Além da limpeza, colunas derivadas foram criadas para enriquecer a análise:
 
-**1. Decisões de limpeza documentadas**
+- `safra_cadastro` — ano em que o cliente se cadastrou, usado para análise de coorte
+- `faixa_etaria` — agrupamento de idade em faixas (18-25, 26-35, 36-45, 46-60, 60+)
+- `receita_liquida` — valor de venda calculado via CASE, excluindo devoluções e cancelamentos
+- `perda_devolucoes` — valor devolvido isolado como coluna, para análise de impacto financeiro
 
-| Campo        | Problema  | Solução    | Justificativa |
-|--------------|-------------|-----------|---------------|
-| `country`    | Grafias inconsistentes ("USA", "us", "United States") | `UPPER(TRIM(country))`      | Padrão para geotargeting |
-| `email`      | Maiúsculas e espaços extras   | `LOWER(TRIM(email))`        | Chave de identificação única |
-| `age`        | Valores nulos | `COALESCE(age, 0)`          | Zero sinaliza ausência sem mascarar o problema  |
-| `created_at` | Tipo inconsistente  | `CAST AS TIMESTAMP`         | Garante fuso correto para cálculo de datas |
+**Fase 3 — Modelagem (Camada Silver)**
 
-**2. Colunas derivadas criadas**
+As três tabelas foram unidas em uma base analítica única. A escolha foi por LEFT JOIN — e não INNER JOIN — para preservar todos os registros e torná-los auditáveis, em vez de descartá-los silenciosamente. A granularidade final é 1 linha por item de pedido, o que permite calcular receita corretamente sem duplicação. Métricas de SLA logístico calculadas nessa etapa:
 
-|Coluna      | Lógica               | Para que serve                                  |
-|-------------|------------------------------|-----------------------------------------------|
-| `safra_cadastro`    |EXTRACT(YEAR FROM created_at)           | Análise de coorte (clientes de 2022 vs 2023) |
-| `faixa_etaria` | CASE WHEN age BETWEEN... | Segmentação demográfica                            |
-| `foi_devolvido`     | CASE WHEN status = 'Returned'          | Filtro de receita líquida                         |
-| `receita_liquida`     | sale_price onde não devolvido          |Receita real, excluindo devoluções |
+- `dias_para_envio` — intervalo entre a data do pedido e a data de envio
+- `dias_para_entrega` — intervalo entre a data do pedido e a data de entrega
+- `envio_atrasado` — flag booleana para envios com mais de 3 dias (threshold padrão de mercado)
 
-## Fase 3: Modelagem / Joins (Camada Silver)
+**Fase 4 — Analytics (Camada Gold)**
 
-**Objetivo:** Unir as tabelas limpas da Fase 2 e preparar a base analítica unificada com métricas de eficiência logística.
+Tabelas geradas: `dim_customers_gold`, `fct_sales_performance`  
 
-**1. Decisão de modelagem: granularidade do join**
+Com a base limpa e unida, as métricas de negócio foram calculadas.  
 
-| Join     | Tipo     | Motivo  |
-|------------|---------------- | ---------|
-| order_items → orders  | LEFT JOIN | Garante que itens sem pedido pai sejam auditáveis |
-| order_items → users | LEFT JOIN | Preserva orphans para investigação |
-| Granularidade final   | 1 linha por item | Correto para cálculo de receita sem duplicação |
+A segmentação RFM classifica cada cliente em 3 dimensões independentes, prontas para o BI usar separadamente ou em conjunto:  
 
-*Por que LEFT JOIN e não INNER JOIN?*  
-Pedidos sem usuário correspondente seriam silenciosamente descartados com INNER JOIN. Com LEFT JOIN, eles aparecem com country IS NULL — detectáveis na validação.
+| Dimensão             | Coluna      | Categorias  |
+|----------------------|------------|---------------|
+| Recencia      | `segmento_recencia`    | Ativo, Em risco, Churn, Sem compra |
+| Frequência           | `segmento_frequencia`    | Muito recorrente, Recorrente, Ocasional, Compra única, Sem compra |
+| Valor   | `segmento_Valor`    | Premium, Alto valor, Médio valor, Baixo valor, Sem compra |
 
-**2. Colunas de SLA logístico criadas**
+A `fct_sales_performance` entrega 1 linha por pedido com ticket médio, SLA logístico e variações de crescimento calculadas com funções de janela (LAG):
 
-| Coluna    | Lógica      | Interpretação |
-|------------|---------------- | ---------|
-| dias_para_envio | DATE_DIFF(shipped_at, created_at, DAY) | Eficiência do fulfillment |
-| dias_para_entrega | DATE_DIFF (delivered_at, created_at, DAY) | Experiência do cliente |
-| envio_atrasado | dias_para_envio > 3 | Threshold de mercado (ajustável) |
+- `variacao_mom_pct` — crescimento vs mês anterior
+- `variacao_yoy_pct` — crescimento vs mesmo mês do ano anterior
+- `media_movel_3m` — média móvel de 3 meses para suavizar sazonalidade
 
-**3. Checklist de validação do join**  
 
-Após executar o join, verificar:  
-
-| Métrica     | Resultado esperado      |
-|------------|------------------|
-| total_itens  | `181097`    |
-| pedidos_unicos | `124728`    |
-| receita_bruta_total   | `10780245.99`    |
-| perda_por_devolucoes  | `1085492.9`    |
-| itens_sem_pais  | `0`    |
-| avg_dias_para_envio  | `1.5`    |
-
-## Fase 4: Analytics (Camada Gold)
-
-**Objetivo:** Entregar as tabelas finais prontas para o time de BI, respondendo as perguntas de negócio do brief.
-
-**Tabela 1 — dim_customers_gold**  
-
-**1. Lógica de status do ciclo de vida**  
-
-| Status     | Critério     |
-|------------|------------------|
-| Novo   | Apenas 1 pedido completo    |
-| Recorrente | 2+ pedidos, recência ≤ 90 dias    |
-| Churn    | Sem compra há mais de 90 dias    |
-| Recuperado  | Estava em Churn (> 90 dias inativo), voltou a comprar  |
-
-*Threshold de 90 dias é padrão de e-commerce. Ajustar conforme o ciclo de compra real do produto.*  
-
-**2. Scores RFM (escala 1–4)**
-
-| Dimensão    | Score 4  | Score 3  | Score 2 |  Score 1 |
-|------------|-----------|----------|---------|----------|
-| Recência   | ≤ 30 dias | ≤ 60 dias| ≤ 90 dias |> 90 dias|
-| Frequência |≥ 10 pedidos| ≥ 5 pedidos| ≥ 2 pedidos| 1 pedido
-| Monetário | ≥ $500 |≥ $200 |≥ $50 |< $50
-
-**3. Segmentos de negócio gerados**
-
-| Segmento  | Critério  | Ação de CRM  |
-|------------|-----------|----------|
-| Champions | R=4, F≥3, M≥3 | Fidelizar, pedir reviews |
-| Loyal Customers | R≥3, F≥3 | Upsell, programa de pontos |
-| Recent Customers | R=4, F≤2 | Incentivar 2ª compra |
-| Big Spenders | R≥3, M≥3 | Produtos premium |
-| At Risk | R=2, F≥2 | Campanha de retenção urgente |
-| Cant Lose Them | R=1, F≥3 |Reativação prioritária|
-| Lost | R=1, F=1 | Baixa prioridade ou descontinuar|
-| Needs Attention | Perfil misto | Investigar|
-
-**4. Colunas extras entregues**
-
-| Coluna    | Lógica      | Interpretação |
-|------------|---------------- | ---------|
-| dias_como_cliente | DATE_DIFF(hoje, user_created_at, DAY) | Janela do LTV |
-| ltv_diario_estimado | receita_total / dias_como_cliente | Proxy de LTV sem modelo preditivo |
-| primeira_compra_at | MIN(order_created_at) | Análise de coorte |
-
-**Tabela 2 — fct_sales_performance**  
-KPIs operacionais por país: receita, ticket médio e SLA logístico.  
-
-| Campo     | Critério     |
-|------------|------------------|
-| receita_bruta   | Soma de sale_price por país    |
-| receita_liquida | Exclui itens devolvidos e cancelados    |
-| perda_devolucoes    | Receita bruta − líquida (impacto financeiro das devoluções)   |
-| ticket_medio  | Média de sale_price por item  |
-| avg_dias_envio  | SLA de fulfillment  |
-| pct_envio_atrasado  | % de envios com mais de 3 dias |
-
-**Séries temporais — YoY e MoM**
-
-| Coluna    | Técnica      | Descrição |
-|------------|---------------- | ---------|
-| variacao_mom_pct | LAG(receita, 1) | Crescimento vs mês anteriore |
-| variacao_yoy_pct | LAG(receita, 12) | Crescimento vs mesmo mês do ano anterior |
-| media_movel_3m | AVG() OVER (ROWS 2 PRECEDING) | Suaviza sazonalidade |
